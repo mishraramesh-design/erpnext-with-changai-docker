@@ -1,0 +1,86 @@
+version: "3.8"
+
+services:
+  db:
+    image: mariadb:10.6
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: "frappe123"   # Change this to a strong password
+      MYSQL_DATABASE: "frappe"
+    volumes:
+      - db-data:/var/lib/mysql
+    restart: unless-stopped
+
+  redis-cache:
+    image: redis:7-alpine
+    command: redis-server --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-cache-data:/data
+    restart: unless-stopped
+
+  redis-queue:
+    image: redis:7-alpine
+    command: redis-server --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-queue-data:/data
+    restart: unless-stopped
+
+  erpnext:
+    image: frappe/erpnext:version-15
+    environment:
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_NAME: frappe
+      DB_PASSWORD: "frappe123"   # Same as above
+      REDIS_CACHE: redis-cache:6379
+      REDIS_QUEUE: redis-queue:6379
+      FRAPPE_SITE: site1.local   # Change later to your domain
+    depends_on:
+      - db
+      - redis-cache
+      - redis-queue
+    volumes:
+      - sites-data:/home/frappe/frappe-bench/sites
+      - logs-data:/home/frappe/frappe-bench/logs
+    restart: unless-stopped
+
+  erpnext-worker:
+    image: frappe/erpnext:version-15
+    command: bench worker --queue default,short,long
+    environment:
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_NAME: frappe
+      DB_PASSWORD: "frappe123"
+      REDIS_CACHE: redis-cache:6379
+      REDIS_QUEUE: redis-queue:6379
+    depends_on:
+      - erpnext
+    volumes:
+      - sites-data:/home/frappe/frappe-bench/sites
+      - logs-data:/home/frappe/frappe-bench/logs
+    restart: unless-stopped
+
+  erpnext-scheduler:
+    image: frappe/erpnext:version-15
+    command: bench schedule
+    environment:
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_NAME: frappe
+      DB_PASSWORD: "frappe123"
+      REDIS_CACHE: redis-cache:6379
+      REDIS_QUEUE: redis-queue:6379
+    depends_on:
+      - erpnext
+    volumes:
+      - sites-data:/home/frappe/frappe-bench/sites
+      - logs-data:/home/frappe/frappe-bench/logs
+    restart: unless-stopped
+
+volumes:
+  db-data:
+  redis-cache-data:
+  redis-queue-data:
+  sites-data:
+  logs-data:
