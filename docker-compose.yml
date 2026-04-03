@@ -5,7 +5,7 @@ services:
     image: mariadb:10.6
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
     environment:
-      MYSQL_ROOT_PASSWORD: "frappe123"   # Change this to a strong password
+      MYSQL_ROOT_PASSWORD: "frappe123"     # ← Change this to a strong password
       MYSQL_DATABASE: "frappe"
     volumes:
       - db-data:/var/lib/mysql
@@ -25,24 +25,36 @@ services:
       - redis-queue-data:/data
     restart: unless-stopped
 
+  redis-socketio:
+    image: redis:7-alpine
+    command: redis-server --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-socketio-data:/data
+    restart: unless-stopped
+
   erpnext:
     image: frappe/erpnext:version-15
     environment:
       DB_HOST: db
       DB_PORT: 3306
       DB_NAME: frappe
-      DB_PASSWORD: "frappe123"   # Same as above
-      REDIS_CACHE: redis-cache:6379
-      REDIS_QUEUE: redis-queue:6379
-      FRAPPE_SITE: site1.local   # Change later to your domain
+      DB_PASSWORD: "frappe123"               # Must match MYSQL_ROOT_PASSWORD
+      REDIS_CACHE: redis://redis-cache:6379
+      REDIS_QUEUE: redis://redis-queue:6379
+      REDIS_SOCKETIO: redis://redis-socketio:6379
+      SITE_NAME: site1.local                 # ← Important
+      FRAPPE_SITE: site1.local
     depends_on:
       - db
       - redis-cache
       - redis-queue
+      - redis-socketio
     volumes:
       - sites-data:/home/frappe/frappe-bench/sites
       - logs-data:/home/frappe/frappe-bench/logs
     restart: unless-stopped
+    ports:
+      - "8000:8000"   # Internal port (optional, for direct access)
 
   erpnext-worker:
     image: frappe/erpnext:version-15
@@ -52,8 +64,9 @@ services:
       DB_PORT: 3306
       DB_NAME: frappe
       DB_PASSWORD: "frappe123"
-      REDIS_CACHE: redis-cache:6379
-      REDIS_QUEUE: redis-queue:6379
+      REDIS_CACHE: redis://redis-cache:6379
+      REDIS_QUEUE: redis://redis-queue:6379
+      REDIS_SOCKETIO: redis://redis-socketio:6379
     depends_on:
       - erpnext
     volumes:
@@ -69,8 +82,9 @@ services:
       DB_PORT: 3306
       DB_NAME: frappe
       DB_PASSWORD: "frappe123"
-      REDIS_CACHE: redis-cache:6379
-      REDIS_QUEUE: redis-queue:6379
+      REDIS_CACHE: redis://redis-cache:6379
+      REDIS_QUEUE: redis://redis-queue:6379
+      REDIS_SOCKETIO: redis://redis-socketio:6379
     depends_on:
       - erpnext
     volumes:
@@ -78,9 +92,40 @@ services:
       - logs-data:/home/frappe/frappe-bench/logs
     restart: unless-stopped
 
+  reverse-proxy:
+    image: nginx:alpine
+    depends_on:
+      - erpnext
+    ports:
+      - "68:80"                     # Your current Hostinger port mapping
+    command:
+      - /bin/sh
+      - -lc
+      - |
+          cat > /etc/nginx/conf.d/default.conf <<'EOF'
+          server {
+              listen 80;
+              server_name _;
+              client_max_body_size 100m;
+              location / {
+                  proxy_pass http://erpnext:8000;
+                  proxy_http_version 1.1;
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto $scheme;
+                  proxy_set_header Upgrade $http_upgrade;
+                  proxy_set_header Connection "upgrade";
+              }
+          }
+          EOF
+          nginx -g 'daemon off;'
+    restart: unless-stopped
+
 volumes:
   db-data:
   redis-cache-data:
   redis-queue-data:
+  redis-socketio-data:
   sites-data:
   logs-data:
